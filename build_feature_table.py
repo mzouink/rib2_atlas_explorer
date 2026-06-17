@@ -99,9 +99,10 @@ def load_manifest(sel):
         if str(isrep) in ("1", "True", "true") and dbn:
             rep_dbn[gf] = dbn
         mem_gf[sid] = gf
-        v = fl(t["best_tm1_v341"][i])
-        if v is not None:
-            tm[sid], near[sid] = v, (t["best_v341"][i] or "")
+        v = fl(t["best_tm1_v341"][i]); nr = t["best_v341"][i] or ""
+        # TM1 == 0 with no nearest chain = USalign couldn't align (too short), not "novel" — leave unscored
+        if v is not None and v > 0 and nr:
+            tm[sid], near[sid] = v, nr
     bp, dbns = {}, {}
     for sid in sel:
         dbn = rep_dbn.get(mem_gf.get(sid))

@@ -28,7 +28,21 @@ python build_static.py            # dist/ = shell + config.js(GATED) + data/ str
 
 `dist/config.js` is generated with `DATA_BASE="" ; GATED=true` (same-origin, passcode on).
 
-## 2. Upload to S3 (admin SSO profile — atlas-operator is read-only on rnanix)
+## Updating the live site (non-expiring deployer)
+
+A scoped IAM user **`atlas-explorer-deployer`** (profile `[atlas-deployer]` in `~/.aws/credentials`,
+**long-lived keys — no SSO expiry**) can push updates. It can only write `rnanix/atlas_explorer/*` and
+invalidate distribution `E2CV6KWMNI7AQP`. Just run:
+
+```bash
+./deploy.sh            # data jsons + web shell + CloudFront invalidation
+./deploy.sh full       # also re-sync structs/ + react/ from dist/ (after build_static.py)
+```
+
+`deploy.sh` deliberately does **not** upload `web/config.js` (S3 keeps the `GATED=true` deploy copy).
+Rotate the key any time: `aws iam create-access-key --user-name atlas-explorer-deployer` (and delete the old).
+
+## 2. Upload to S3 (initial build — admin SSO; atlas-operator is read-only on rnanix)
 
 ```bash
 # shell + data + react (content-type auto by extension)

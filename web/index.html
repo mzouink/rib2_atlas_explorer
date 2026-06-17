@@ -19,7 +19,10 @@
 
 <header>
   <h1>RNA Atlas Explorer</h1>
-  <span id="universe" class="universe">curated set</span>
+  <span id="sourcewrap">
+    <button id="source-btn" title="Choose data sources">Source &#9662;</button>
+    <div id="source-panel" class="hidden"></div>
+  </span>
   <input id="search" type="search" placeholder="search id · name · sublibrary…" autocomplete="off">
   <span id="layoutctl" title="preview panel layout">
     <button data-mode="modal" title="Centered window">&#9744;</button>
@@ -50,6 +53,7 @@
       <legend>Novelty</legend>
       <div class="row"><label>best_tm1 &le;</label><input type="range" id="tm_max" min="0" max="1" value="1" step="0.01"><span id="tm_max_v">1.00</span></div>
       <label class="chk"><input type="checkbox" id="tm_has"> only folds with computed best_tm1</label>
+      <label class="chk"><input type="checkbox" id="novel_only"> novel only (is_novel flag)</label>
       <div class="row"><label>overlap_AE &le;</label><input type="range" id="ov_max" min="0" max="1" value="1" step="0.01"><span id="ov_max_v">1.00</span></div>
     </fieldset>
 
@@ -73,9 +77,8 @@
     </fieldset>
 
     <fieldset>
-      <legend>Topology / source</legend>
+      <legend>Topology</legend>
       <select id="pk"><option value="any">pseudoknot: any</option><option value="1">pseudoknot only</option><option value="0">exclude pseudoknots</option></select>
-      <div id="letter_filter" class="letters"></div>
     </fieldset>
 
     <fieldset>
@@ -122,7 +125,7 @@
     <dl>
       <dt>Search</dt><dd>Matches the <b>seq_id</b>, the human-readable <b>name</b>, or the <b>sublibrary</b>.</dd>
       <dt>Length</dt><dd>Design-region length in nucleotides (excludes the fixed primer/barcode padding).</dd>
-      <dt>Source / letter</dt><dd><b>A–E</b> = synthetic designs (gRNAde, UW, RNAMake). <b>F–H</b> = natural RNAs (RNAcentral). Per-library checkboxes.</dd>
+      <dt>Source / letter</dt><dd>Pick datasets in the header <b>Source</b> menu — check any combination and the table merges them. Under <b>Ribonanza-2 curated</b>, per-library letter checkboxes appear: <b>A–E</b> = synthetic designs (gRNAde, UW, RNAMake), <b>F–H</b> = natural RNAs (RNAcentral). Ribo-1 pseudolabel / OpenKnot / RFAM-PDB are separate sources (no SHAPE/motif columns).</dd>
     </dl>
 
     <h3>Confidence</h3>
@@ -187,6 +190,7 @@
 
 <script src="lib/3Dmol-min.js"></script>
 <script src="config.js"></script>
+<script src="datasets.js"></script>
 <script src="viz_style.js"></script>
 <script src="app.js"></script>
 </body>

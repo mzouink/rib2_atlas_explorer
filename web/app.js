@@ -1,6 +1,16 @@
 // RNA Atlas Explorer — client-side filtering/ranking + lazy deep view.
-let FOLDS = [], MOTIFS = {}, PAIRING = {}, MOTIF_SET = [], LETTERS = [];
+// Sources are chosen as checkboxes (header "Source" menu) and MERGED: FOLDS is the
+// union of every checked dataset, each fold tagged with f._dsid so the deep view can
+// dispatch struct/ext/reactivity/motifs per row.
+let FOLDS = [], MOTIF_SET = [], LETTERS = [];
+let MOTIFS_BY_DS = {}, PAIRING_BY_DS = {};  // {dsid: {foldId: ...}} — only motif-bearing datasets populate these
 let sortOverride = null;  // {key, dir} from header click
+const DATASETS = window.DATASETS || [{ id: "ribo2", label: "curated", base: "", ext: "cif", react: true, motifs: true }];
+const DSBYID = {}; DATASETS.forEach((d) => { DSBYID[d.id] = d; });
+const LOADED = {};        // dsid -> {folds, motifs, pairing} cache (loaded once)
+function dsFor(f) { return DSBYID[f._dsid] || DATASETS[0]; }
+function prefix(ds) { return ds && ds.base ? ds.base + "/" : ""; }
+function activeSources() { return [...document.querySelectorAll(".src:checked")].map((c) => c.value); }
 
 // Data source: "" = same origin (local serve.py). Otherwise a CloudFront URL
 // fronting the S3 data, gated by a shared token (prompted once, kept in localStorage).
@@ -24,7 +34,7 @@ const num = (x, d = 1) => (x === null || x === undefined || Number.isNaN(x)) ? "
 
 // --- persist filter settings across reloads ---
 const FKEY = "atlas_filters";
-const FIELD_IDS = ["search", "len_min", "len_max", "plddt_min", "clash_max", "tm_max", "tm_has",
+const FIELD_IDS = ["search", "len_min", "len_max", "plddt_min", "clash_max", "tm_max", "tm_has", "novel_only",
   "ov_max", "shape_ok", "agr_min", "cr_min", "bp_min", "req_tert", "req_rare", "pk", "rank_key", "topn", "per_letter", "alt_palette"];
 const altPalette = () => !!($("alt_palette") && $("alt_palette").checked);
 function snapshot() {
@@ -32,6 +42,7 @@ function snapshot() {
   FIELD_IDS.forEach((id) => { const el = $(id); if (el) s[id] = el.type === "checkbox" ? el.checked : el.value; });
   s.mf = [...document.querySelectorAll(".mf:checked")].map((c) => c.value);
   s.lf = [...document.querySelectorAll(".lf:checked")].map((c) => c.value);
+  s.src = activeSources();
   s.sort = sortOverride;
   s.collapsed = [...document.querySelectorAll("#config fieldset")].map((fs, i) => fs.classList.contains("collapsed") ? i : -1).filter((i) => i >= 0);
   s.allcollapsed = $("config").classList.contains("allcollapsed");
@@ -69,35 +80,88 @@ function showGate(msg) {
 
 async function boot() {
   if (GATED && !token()) return showGate();
-  let folds, motifs;
+  buildSourcePanel();
+  wireSourceUI();
+  wireStatic();
+  // initial source selection: persisted set, else just the first dataset (ribo2)
+  const st = loadState();
+  const saved = st && st.src;
+  document.querySelectorAll(".src").forEach((c) => {
+    c.checked = (saved && saved.length) ? saved.includes(c.value) : (c.value === DATASETS[0].id);
+  });
+  toggleLetterVisibility(); updateSourceBtn();
+  await loadSources();
+}
+
+function buildSourcePanel() {
+  // The motif-bearing dataset (ribo2) gets the nested per-letter checkboxes (#letter_filter).
+  $("source-panel").innerHTML = DATASETS.map((d) => {
+    const row = `<label class="srcrow"><input type="checkbox" class="src" value="${d.id}">${d.label}</label>`;
+    return d.motifs ? row + `<div id="letter_filter" class="letters srcsub"></div>` : row;
+  }).join("");
+}
+
+function wireSourceUI() {
+  $("source-btn").addEventListener("click", (e) => { e.stopPropagation(); $("source-panel").classList.toggle("hidden"); });
+  document.addEventListener("click", (e) => { if (!$("sourcewrap").contains(e.target)) $("source-panel").classList.add("hidden"); });
+  document.querySelectorAll(".src").forEach((c) =>
+    c.addEventListener("change", () => { toggleLetterVisibility(); updateSourceBtn(); saveState(); loadSources(); }));
+}
+
+function toggleLetterVisibility() {
+  const on = [...document.querySelectorAll(".src")].some((c) => c.checked && DSBYID[c.value] && DSBYID[c.value].motifs);
+  const lf = $("letter_filter"); if (lf) lf.style.display = on ? "" : "none";
+}
+function updateSourceBtn() {
+  const n = activeSources().length;
+  $("source-btn").innerHTML = `Source${n ? ` (${n})` : ""} &#9662;`;
+}
+
+async function ensureLoaded(dsid) {
+  if (LOADED[dsid]) return;
+  const ds = DSBYID[dsid];
+  const folds = await getJSON(prefix(ds) + "data/folds.json");
+  folds.forEach((f) => { f._dsid = dsid; });
+  let motifs = {}, pairing = {};
+  if (ds.motifs) {
+    try { motifs = await getJSON(prefix(ds) + "data/motifs.json"); } catch (e) {}
+    try { pairing = await getJSON(prefix(ds) + "data/pairing.json"); } catch (e) {}
+  }
+  LOADED[dsid] = { folds, motifs, pairing };
+}
+
+async function loadSources() {
+  const active = activeSources();
   try {
-    folds = await getJSON("data/folds.json");
-    motifs = await getJSON("data/motifs.json");
+    for (const id of active) await ensureLoaded(id);
   } catch (e) {
-    if (GATED) {
-      localStorage.removeItem("atlas_token");
-      return showGate(e.status === 403 ? "Incorrect passcode — try again." : "Could not load data (" + (e.status || "network") + ").");
-    }
+    if (GATED && e.status === 403) { localStorage.removeItem("atlas_token"); return showGate("Incorrect passcode — try again."); }
+    if (GATED) return showGate("Could not load data (" + (e.status || "network") + ").");
     throw e;
   }
-  FOLDS = folds; MOTIFS = motifs;
-  try { PAIRING = await getJSON("data/pairing.json"); } catch (e) { PAIRING = {}; }
+  FOLDS = []; MOTIFS_BY_DS = {}; PAIRING_BY_DS = {}; FBYK = {};
+  for (const id of active) {
+    const L = LOADED[id]; if (!L) continue;
+    FOLDS = FOLDS.concat(L.folds);
+    MOTIFS_BY_DS[id] = L.motifs; PAIRING_BY_DS[id] = L.pairing;
+  }
   const ms = new Set(), ls = new Set();
   let maxLen = 0;
   for (const f of FOLDS) {
     (f.motifs || []).forEach((m) => ms.add(m));
-    if (f.letter) ls.add(f.letter);
+    if (DSBYID[f._dsid] && DSBYID[f._dsid].motifs && f.letter) ls.add(f.letter);  // letters only from motif-bearing source
     if (f.length > maxLen) maxLen = f.length;
   }
   MOTIF_SET = [...ms].sort();
   LETTERS = [...ls].sort();
-  $("len_max").value = maxLen;
+  $("len_max").value = maxLen || 9999;
   const maxCR = Math.max(1, ...FOLDS.map((f) => f.contact_ratio || 0));
   $("cr_min").max = Math.ceil(maxCR * 20) / 20;
   buildMotifFilter();
   buildLetterFilter();
-  wireControls();
+  wireDynamic();
   applyState(loadState());
+  toggleLetterVisibility();
   syncLabels();
   render();
 }
@@ -113,8 +177,13 @@ function buildLetterFilter() {
     `<label><input type="checkbox" class="lf" value="${l}" checked>${l}</label>`).join("");
 }
 
-function wireControls() {
-  document.querySelectorAll("#config input, #config select").forEach((el) =>
+function wireDynamic() {
+  document.querySelectorAll(".mf,.lf").forEach((c) =>
+    c.addEventListener("change", () => { saveState(); render(); }));
+}
+
+function wireStatic() {
+  document.querySelectorAll("#config input:not(.mf):not(.lf), #config select").forEach((el) =>
     el.addEventListener("input", () => { syncLabels(); saveState(); render(); }));
   $("reset").addEventListener("click", () => {
     document.querySelectorAll(".mf").forEach((c) => c.checked = false);
@@ -123,7 +192,7 @@ function wireControls() {
     $("agr_min").value = -1;
     $("plddt_min").value = 0; $("clash_max").value = 9999; $("len_min").value = 0;
     $("len_max").value = Math.max(...FOLDS.map((f) => f.length || 0));
-    ["shape_ok", "req_tert", "req_rare", "tm_has", "per_letter"].forEach((id) => $(id).checked = false);
+    ["shape_ok", "req_tert", "req_rare", "tm_has", "novel_only", "per_letter"].forEach((id) => $(id).checked = false);
     $("cr_min").value = 0; $("bp_min").value = 0;
     $("pk").value = "any"; $("rank_key").value = "best_tm1:asc"; $("topn").value = 200;
     if ($("search")) $("search").value = "";
@@ -162,7 +231,7 @@ function filters() {
     q: ($("search") ? $("search").value : "").trim().toLowerCase(),
     lmin: +$("len_min").value, lmax: +$("len_max").value,
     plddt: +$("plddt_min").value, clash: +$("clash_max").value,
-    tmax: +$("tm_max").value, tmhas: $("tm_has").checked,
+    tmax: +$("tm_max").value, tmhas: $("tm_has").checked, novelOnly: $("novel_only").checked,
     ovmax: +$("ov_max").value,
     shape: $("shape_ok").checked, agr: +$("agr_min").value,
     crmin: +$("cr_min").value, bpmin: +$("bp_min").value,
@@ -179,6 +248,7 @@ function pass(f, c) {
   if ((f.plddt || 0) < c.plddt) return false;
   if (f.clashscore != null && f.clashscore > c.clash) return false;
   if (c.tmhas && f.best_tm1 == null) return false;
+  if (c.novelOnly && f.is_novel_v341 !== 1) return false;
   if (f.best_tm1 != null && f.best_tm1 > c.tmax) return false;
   if (f.overlap_ae != null && f.overlap_ae > c.ovmax) return false;
   if (c.shape && !f.shape_ok) return false;
@@ -189,7 +259,7 @@ function pass(f, c) {
   if (c.rare && f.n_rare < 1) return false;
   if (c.motifs.length && !c.motifs.some((m) => (f.motifs || []).includes(m))) return false;
   if (c.pk !== "any" && String(f.pseudoknot) !== c.pk) return false;
-  if (f.letter && !c.letters.has(f.letter)) return false;
+  if (DSBYID[f._dsid] && DSBYID[f._dsid].motifs && f.letter && !c.letters.has(f.letter)) return false;
   return true;
 }
 
@@ -264,8 +334,8 @@ function drawTable(rows) {
 }
 
 // ---------------- deep view ----------------
-const FBY = {};
-function foldById(id) { if (!FBY[id]) FOLDS.forEach((f) => FBY[f.id] = f); return FBY[id]; }
+let FBYK = {};
+function foldById(id) { if (!FBYK[id]) FOLDS.forEach((f) => FBYK[f.id] = f); return FBYK[id]; }
 
 function currentMode() { return localStorage.getItem("atlas_deepmode") || "modal"; }
 function updateLayout() {
@@ -292,15 +362,18 @@ function closeDeep() {
 
 async function openDeep(id) {
   const f = foldById(id);
+  const ds = dsFor(f);
   $("deep").classList.remove("hidden");
   setDeepMode(currentMode());
   $("deep-title").textContent = `${id}${f.name ? "  —  " + f.name : ""}`;
   drawProps(f);
   let react = null;
-  try { react = await (await fetch(durl("react/" + id + ".json"))).json(); } catch (e) { react = null; }
+  if (ds.react) {
+    try { react = await (await fetch(durl(prefix(ds) + "react/" + id + ".json"))).json(); } catch (e) { react = null; }
+  }
   currentDeep = { f, react };
   drawTracks(f, react);
-  load3D(id, react);
+  load3D(f, react);
 }
 let currentDeep = null;
 
@@ -330,8 +403,9 @@ function drawProps(f) {
     + `<tr><td class="muted">Motifs</td><td>${chips}</td></tr></table>`;
 }
 
-function spansFor(id) {
-  return (MOTIFS[id] || []).map(([type, res]) => {
+function spansFor(f) {
+  const M = MOTIFS_BY_DS[f._dsid] || {};
+  return (M[f.id] || []).map(([type, res]) => {
     const ranges = [];
     res.split(",").forEach((c) => {
       const rng = c.trim().split(":").pop();
@@ -350,7 +424,7 @@ function drawTracks(f, react) {
   if (!n) { $("tracks").innerHTML = '<p class="muted">No reactivity / sequence available for this fold.</p>'; return; }
   const cw = Math.max(6, Math.min(16, Math.floor(900 / n)));
   const W = n * cw, pad = 4;
-  const motifs = spansFor(f.id);
+  const motifs = spansFor(f);
   // lane assignment
   const lanes = [];
   motifs.forEach((m) => {
@@ -386,7 +460,7 @@ function drawTracks(f, react) {
   svg += rrow(react && react.dms, yDms, "DMS");
   svg += rrow(react && react.a23, yA23, "2A3");
   // predicted pairing track: unpaired = light red, paired = white (eyeball SHAPE agreement)
-  const dbn = PAIRING[f.id] || "";
+  const dbn = (PAIRING_BY_DS[f._dsid] || {})[f.id] || "";
   let pr = `<text x="${W + 3}" y="${yPair + 11}" fill="#5b6670">pair</text>`;
   for (let i = 0; i < n; i++) {
     const ch = dbn[i];
@@ -399,12 +473,14 @@ function drawTracks(f, react) {
 }
 
 let viewer = null;
-async function load3D(id, react) {
+async function load3D(f, react) {
   const el = $("viewer3d");
   el.innerHTML = "";
   if (typeof $3Dmol === "undefined") { el.innerHTML = '<p style="color:#fff;padding:8px">3Dmol.js not loaded.</p>'; return; }
+  const id = f.id;
+  const ds = dsFor(f);
   let data;
-  try { data = await (await fetch(durl("structs/" + id + ".cif"))).text(); }
+  try { data = await (await fetch(durl(prefix(ds) + "structs/" + (f.key || f.id) + "." + (ds.ext || "cif")))).text(); }
   catch (e) { el.innerHTML = '<p style="color:#fff;padding:8px">structure unavailable</p>'; return; }
   viewer = $3Dmol.createViewer(el, { backgroundColor: "0x0d1117" });
   const fmt = data.startsWith("data_") || data.includes("_atom_site") ? "cif" : "pdb";
@@ -423,7 +499,7 @@ async function load3D(id, react) {
   } else {
     viewer.setStyle({}, { cartoon: { color: "spectrum", ringMode: 3 } });
   }
-  spansFor(id).forEach((m) => {
+  spansFor(f).forEach((m) => {
     const resi = [];
     m.ranges.forEach(([a, b]) => { for (let r = a; r <= b; r++) resi.push(r); });
     viewer.addStyle({ resi }, { stick: { color: motifColor(m.type), radius: 0.28 } });

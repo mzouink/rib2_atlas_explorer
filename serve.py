@@ -133,6 +133,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send(data, "text/plain") if data else self._send("not found", code=404)
             if path.startswith("/react/") and path.endswith(".json"):
                 return self._send(json.dumps(reactivity(path[len("/react/"):-len(".json")])), "application/json")
+            if path.startswith("/data/datasets/"):   # extra atlases live under /data/ (already gated)
+                rel = path[len("/data/datasets/"):]
+                base = os.path.join(ROOT, "dist", "datasets")
+                fp = os.path.normpath(os.path.join(base, rel))
+                if not fp.startswith(base) or not os.path.isfile(fp):
+                    return self._send("not found", code=404)
+                if fp.endswith(".pdb"):   # stored gzip-compressed; gunzip for the browser
+                    with gzip.open(fp, "rt") as f:
+                        return self._send(f.read(), "text/plain")
+                with open(fp, "rb") as f:
+                    return self._send(f.read(), CT.get(os.path.splitext(fp)[1], "application/octet-stream"))
             if path.startswith("/data/"):
                 return self._serve_file(os.path.join(DATA, path[len("/data/"):]))
             return self._serve_file(os.path.join(WEB, path.lstrip("/")))
