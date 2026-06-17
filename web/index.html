@@ -99,6 +99,15 @@
 
     <fieldset>
       <legend>Display</legend>
+      <label class="chk" for="color_by">3D structure coloring</label>
+      <select id="color_by">
+        <option value="a23">2A3 SHAPE reactivity</option>
+        <option value="dms">DMS reactivity</option>
+        <option value="plddt">pLDDT confidence</option>
+        <option value="pairing">base pairing (paired/unpaired)</option>
+        <option value="nuc">nucleotide (A/C/G/U)</option>
+        <option value="spectrum">spectrum (5&prime;&rarr;3&prime;)</option>
+      </select>
       <label class="chk"><input type="checkbox" id="alt_palette" checked> base colors: A gold · C green · G red · U blue</label>
     </fieldset>
 
@@ -168,7 +177,7 @@
 
     <h3>Deep view (click any row)</h3>
     <dl>
-      <dt>3D structure</dt><dd>Interactive cartoon colored by 2A3 reactivity (blue = protected → red = reactive); tertiary-motif residues shown as colored sticks. Dock it centered / right / bottom via the header layout buttons.</dd>
+      <dt>3D structure</dt><dd>Interactive cartoon; tertiary-motif residues shown as colored sticks. The <b>3D structure coloring</b> dropdown (Display panel) selects how the cartoon is colored: <b>2A3 / DMS reactivity</b> (blue = protected → red = reactive), <b>pLDDT confidence</b> (blue high → orange low), <b>base pairing</b> (white = paired, light red = unpaired), <b>nucleotide</b> (A/C/G/U palette), or <b>spectrum</b> (5′→3′). Reactivity falls back to spectrum when a fold has no chemical-mapping data. Dock it centered / right / bottom via the header layout buttons.</dd>
       <dt>Tracks</dt><dd>Motif lanes · sequence · DMS · 2A3 reactivity, aligned on the design-sequence position axis.</dd>
     </dl>
   </div>

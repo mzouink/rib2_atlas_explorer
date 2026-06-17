@@ -31,11 +31,13 @@ async function getJSON(path) {
 
 const $ = (id) => document.getElementById(id);
 const num = (x, d = 1) => (x === null || x === undefined || Number.isNaN(x)) ? "" : (+x).toFixed(d);
+// escape for HTML text + attribute values (ids/names can contain " < & — e.g. OpenKnot ids)
+const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // --- persist filter settings across reloads ---
 const FKEY = "atlas_filters";
 const FIELD_IDS = ["search", "len_min", "len_max", "plddt_min", "clash_max", "tm_max", "tm_has", "novel_only",
-  "ov_max", "shape_ok", "agr_min", "cr_min", "bp_min", "req_tert", "req_rare", "pk", "rank_key", "topn", "per_letter", "alt_palette"];
+  "ov_max", "shape_ok", "agr_min", "cr_min", "bp_min", "req_tert", "req_rare", "pk", "rank_key", "topn", "per_letter", "alt_palette", "color_by"];
 const altPalette = () => !!($("alt_palette") && $("alt_palette").checked);
 function snapshot() {
   const s = {};
@@ -195,11 +197,13 @@ function wireStatic() {
     ["shape_ok", "req_tert", "req_rare", "tm_has", "novel_only", "per_letter"].forEach((id) => $(id).checked = false);
     $("cr_min").value = 0; $("bp_min").value = 0;
     $("pk").value = "any"; $("rank_key").value = "best_tm1:asc"; $("topn").value = 200;
+    if ($("color_by")) $("color_by").value = "a23";
     if ($("search")) $("search").value = "";
     sortOverride = null; localStorage.removeItem(FKEY); syncLabels(); render();
   });
   if ($("search")) $("search").addEventListener("input", () => { saveState(); render(); });
-  if ($("alt_palette")) $("alt_palette").addEventListener("change", () => { if (currentDeep) drawTracks(currentDeep.f, currentDeep.react); });
+  if ($("alt_palette")) $("alt_palette").addEventListener("change", () => { if (currentDeep) { drawTracks(currentDeep.f, currentDeep.react); load3D(currentDeep.f, currentDeep.react); } });
+  if ($("color_by")) $("color_by").addEventListener("change", () => { if (currentDeep) load3D(currentDeep.f, currentDeep.react); });
   // collapsible sections (click a legend) + collapse-all (click the panel heading)
   document.querySelectorAll("#config fieldset legend").forEach((lg) =>
     lg.addEventListener("click", () => { lg.parentElement.classList.toggle("collapsed"); saveState(); }));
@@ -319,8 +323,8 @@ function drawTable(rows) {
     const shape = f.shape_ok ? `<span class="pill" style="background:#3a7d44">yes</span>`
       : (hasShape ? `<span class="muted" title="has SHAPE data but motif residues not protected">no</span>`
                   : `<span class="muted" title="no usable SHAPE data for this fold">n/d</span>`);
-    return `<tr data-id="${f.id}">
-      <td>${f.id}</td><td>${f.name || ""}</td><td>${f.letter}</td>
+    return `<tr data-id="${esc(f.id)}">
+      <td>${esc(f.id)}</td><td>${esc(f.name || "")}</td><td>${f.letter}</td>
       <td class="num">${f.length ?? ""}</td><td class="num">${plbar}</td>
       <td class="num">${num(f.best_tm1, 3)}</td><td title="${(f.near_title || "").replace(/"/g, "&quot;")}">${f.near || ""}</td>
       <td class="num">${num(f.overlap_ae, 2)}</td><td>${shape}</td>
@@ -485,20 +489,25 @@ async function load3D(f, react) {
   viewer = $3Dmol.createViewer(el, { backgroundColor: "0x0d1117" });
   const fmt = data.startsWith("data_") || data.includes("_atom_site") ? "cif" : "pdb";
   viewer.addModel(data, fmt);
-  const a23 = react && react.a23;
-  if (a23) {
-    viewer.setStyle({}, { cartoon: { colorfunc: (atom) => {
-      const v = a23[atom.resi - 1];
-      if (v == null || Number.isNaN(v)) return "0xf7f7f7";
-      const t = Math.max(-0.3, Math.min(1, v));
-      const f = (t + 0.3) / 1.3;  // 0..1 blue->white->red
-      const c = f < 0.5 ? $3Dmol.CC.color(shapeMix(PROT_STOPS[0], PROT_STOPS[1], f * 2))
-                        : $3Dmol.CC.color(shapeMix(PROT_STOPS[1], PROT_STOPS[2], (f - 0.5) * 2));
-      return c;
-    }, ringMode: 3 } });
-  } else {
-    viewer.setStyle({}, { cartoon: { color: "spectrum", ringMode: 3 } });
+  const a23 = react && react.a23, dms = react && react.dms;
+  const dbn = (PAIRING_BY_DS[f._dsid] || {})[f.id] || "";
+  const mode = ($("color_by") && $("color_by").value) || "a23";
+  let style;
+  if (mode === "plddt") {                       // per-residue pLDDT from the B-factor (AlphaFold palette)
+    style = { cartoon: { colorfunc: (a) => plddtCF(a.b), ringMode: 3 } };
+  } else if (mode === "pairing") {              // predicted secondary structure: paired vs unpaired
+    style = { cartoon: { colorfunc: (a) => { const c = dbn[a.resi - 1]; const p = c && c !== "." && c !== "-"; return p ? "0xffffff" : (c ? "0xf3a0a0" : "0x9aa7b0"); }, ringMode: 3 } };
+  } else if (mode === "nuc") {                   // nucleotide identity (same palette as the sequence track)
+    const alt = altPalette();
+    style = { cartoon: { colorfunc: (a) => hexCF(nucColor((a.resn || "").trim(), alt)), ringMode: 3 } };
+  } else if (mode === "spectrum") {
+    style = { cartoon: { color: "spectrum", ringMode: 3 } };
+  } else {                                       // a23 / dms reactivity (blue protected -> red reactive); spectrum if absent
+    const arr = mode === "dms" ? dms : a23;
+    style = arr ? { cartoon: { colorfunc: (a) => reactCF(arr[a.resi - 1]), ringMode: 3 } }
+                : { cartoon: { color: "spectrum", ringMode: 3 } };
   }
+  viewer.setStyle({}, style);
   spansFor(f).forEach((m) => {
     const resi = [];
     m.ranges.forEach(([a, b]) => { for (let r = a; r <= b; r++) resi.push(r); });
@@ -508,6 +517,17 @@ async function load3D(f, react) {
 }
 function shapeMix(a, b, t) {
   return "0x" + [0, 1, 2].map((i) => Math.round((a[i] + (b[i] - a[i]) * t) * 255).toString(16).padStart(2, "0")).join("");
+}
+function hexCF(h) { return "0x" + h.replace("#", ""); }
+function reactCF(v) {                              // 2A3/DMS: blue protected -> white -> red reactive
+  if (v == null || Number.isNaN(v)) return "0xf7f7f7";
+  const t = Math.max(-0.3, Math.min(1, v)), f = (t + 0.3) / 1.3;
+  return f < 0.5 ? $3Dmol.CC.color(shapeMix(PROT_STOPS[0], PROT_STOPS[1], f * 2))
+                 : $3Dmol.CC.color(shapeMix(PROT_STOPS[1], PROT_STOPS[2], (f - 0.5) * 2));
+}
+function plddtCF(b) {                              // AlphaFold confidence palette
+  if (b == null || Number.isNaN(b)) return "0xcccccc";
+  return b >= 90 ? "0x0053d6" : b >= 70 ? "0x65cbf3" : b >= 50 ? "0xffdb13" : "0xff7d45";
 }
 
 boot();

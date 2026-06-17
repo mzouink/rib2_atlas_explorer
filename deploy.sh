@@ -44,14 +44,17 @@ push_data() {
 }
 
 push_heavy() {
+  # `|| true`: aws s3 sync returns non-zero if it skips a vanished/missing source file;
+  # with set -e that would abort the whole deploy mid-way (and skip later datasets). A few
+  # missing structs are non-fatal, so don't let them kill the run.
   echo "structs/ + react/ + datasets/ from dist/ ..."
-  aws --profile $P s3 sync dist/react   "$B/react"   --only-show-errors
-  aws --profile $P s3 sync dist/structs "$B/structs" --content-encoding gzip --content-type text/plain --only-show-errors
+  aws --profile $P s3 sync dist/react   "$B/react"   --only-show-errors || true
+  aws --profile $P s3 sync dist/structs "$B/structs" --content-encoding gzip --content-type text/plain --only-show-errors || true
   for ds in dist/datasets/*/; do
     [ -d "$ds" ] || continue; name=$(basename "$ds")
     echo "dataset $name ... (under /data/ so the existing passcode gate covers it)"
-    aws --profile $P s3 sync "$ds/data"    "$B/data/datasets/$name/data"    --content-type application/json --only-show-errors
-    aws --profile $P s3 sync "$ds/structs" "$B/data/datasets/$name/structs" --content-encoding gzip --content-type text/plain --only-show-errors
+    aws --profile $P s3 sync "$ds/data"    "$B/data/datasets/$name/data"    --content-type application/json --only-show-errors || true
+    aws --profile $P s3 sync "$ds/structs" "$B/data/datasets/$name/structs" --content-encoding gzip --content-type text/plain --only-show-errors || true
   done
 }
 
