@@ -18,6 +18,18 @@ web app over the Ribonanza-2 (+ add-on) RNA prediction atlases: filter/rank fold
   token (the `atlas-deployer` IAM cannot touch CloudFront/Route53).
 - **Two-tier deploy:** `dev/` prefix for staging (reuses prod data via `DATA_BASE=".."`), root for prod.
 
+## AWS access / credentials
+
+- **All website updates use the `atlas-deployer` AWS profile** (`aws --profile atlas-deployer`) —
+  a dedicated IAM user (`atlas-explorer-deployer`) with **non-expiring** long-lived keys, scoped to
+  S3 writes on `s3://rnanix/atlas_explorer` + CloudFront `create-invalidation`. `deploy.sh` uses it.
+  It **cannot** edit the CloudFront distribution/function or Route53 (least-privilege).
+- **Admin tasks** (editing the `atlas-explorer-gate` CloudFront function, Route53/ACM) use the
+  **`default`** profile = an SSO **AdministratorAccess** role with **temporary** creds that expire;
+  refresh them (re-fetch into `~/.aws/credentials [default]`) when you get `ExpiredToken`.
+- Other profiles (`atlas-operator`, `atlas-reader`) lack CloudFront/Route53 perms.
+- The GitHub push token is read from `~/.git-credentials` (https remote).
+
 ## Deploy (`deploy.sh`, uses the non-expiring `atlas-deployer` profile)
 
 ```
