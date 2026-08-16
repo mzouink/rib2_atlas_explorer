@@ -1,11 +1,10 @@
 // Atlas assistant — an in-page Claude agent that drives the explorer (filters, search,
 // fold selection, map view) and does analysis (data + stats + charts) via window.AtlasAPI.
-// Preferred path: the server-side claude-proxy Lambda (window.CLAUDE_PROXY) — it holds the
-// Anthropic key, the browser only ever sends the shared site passcode. If no proxy is
-// configured, falls back to a PER-USER key (localStorage "atlas_claude_key", entered by that
-// user, never shipped by deploy.sh) calling the Anthropic Messages API directly from the
-// browser. There is intentionally no shared/org key path here — that was the 2026-07 leak
-// (window.CLAUDE_KEY, injected by deploy.sh into public config.js); do not reintroduce it.
+// Token: PER-USER only (localStorage "atlas_claude_key", entered by that user, prompted for on
+// first use, never shipped by deploy.sh) — calls the Anthropic Messages API directly from the
+// browser with that key. There is intentionally no shared/org key anywhere (client or server
+// proxy) — a shared key leaked in 2026-07 (window.CLAUDE_KEY, injected by deploy.sh into public
+// config.js); see docs/incident_2026-07_claude_key_leak.md. Do not reintroduce any shared key.
 (function () {
   const API = "https://api.anthropic.com/v1/messages";
   function model() { const s = $("agent-model"); return (s && s.value) || localStorage.getItem("atlas_model") || window.CLAUDE_MODEL || "claude-sonnet-4-6"; }
@@ -211,18 +210,9 @@ addEventListener('resize',function(){W=innerWidth;H=innerHeight;cam.aspect=W/H;c
 
   async function callAPI() {
     const payload = { model: model(), max_tokens: 1500, system: SYSTEM, tools: TOOLS, messages };
-    // Preferred: the server-side claude-proxy (key lives in the Lambda, never the browser). The
-    // browser sends only the shared passcode. Falls back to a direct Anthropic call with a
-    // per-user key when no proxy is configured (window.CLAUDE_PROXY unset).
-    let url, headers;
-    if (window.CLAUDE_PROXY) {
-      url = window.CLAUDE_PROXY.replace(/\/+$/, "") + "/chat";
-      headers = { "content-type": "application/json", "x-atlas-token": (localStorage.getItem("atlas_token") || "") };
-    } else {
-      url = API;
-      headers = { "content-type": "application/json", "x-api-key": key(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
-    }
-    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+    // Per-user key only, direct to Anthropic — there is no shared/server-side key.
+    const headers = { "content-type": "application/json", "x-api-key": key(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+    const r = await fetch(API, { method: "POST", headers, body: JSON.stringify(payload) });
     if (!r.ok) throw new Error("API " + r.status + ": " + (await r.text()).slice(0, 300));
     return r.json();
   }
@@ -300,7 +290,7 @@ addEventListener('resize',function(){W=innerWidth;H=innerHeight;cam.aspect=W/H;c
     scroll();
   }
   function ensureKey() {
-    if (window.CLAUDE_PROXY || key()) return true;   // proxy holds the key server-side; no per-user key needed
+    if (key()) return true;
     const k = prompt("Anthropic API key for the Atlas assistant (stored only in this browser):");
     if (k) { localStorage.setItem("atlas_claude_key", k.trim()); return true; }
     return false;

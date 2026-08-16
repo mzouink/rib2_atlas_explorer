@@ -14,28 +14,15 @@ DIST=E2CV6KWMNI7AQP
 CF=ddc01lh56i5th.cloudfront.net
 cd "$(dirname "$0")"
 
-# Fail loudly (not silently) when a required local config file is missing. See the 2026-07
-# incident: `[ -f .claude_key ] && CFG=...` degraded silently on a machine missing that file,
-# shipping a client with no key-handling code at all, then later `.claude_proxy` inherited the
-# same shape. A missing required file must abort the deploy, not just skip a line.
-require_file() {
-  local f="$1" msg="$2"
-  if [ ! -f "$f" ]; then
-    echo "ERROR: $f is missing -- $msg" >&2
-    exit 1
-  fi
-}
-
-# Refuse to even upload a config.js that doesn't carry CLAUDE_PROXY, or that contains anything
-# credential-shaped (a raw Anthropic key, or a reintroduced CLAUDE_KEY assignment).
+# Refuse to upload a config.js that contains anything credential-shaped. There is no shared
+# Anthropic key anywhere in this architecture (client or server-side proxy) -- each user sets
+# their own key in their own browser (web/agent.js localStorage "atlas_claude_key"). A shared
+# key (window.CLAUDE_KEY) leaked in 2026-07 by being injected here; see
+# docs/incident_2026-07_claude_key_leak.md. Do not reintroduce a shared key of any kind.
 assert_safe_config() {
   local cfg="$1"
-  if ! grep -q "CLAUDE_PROXY" <<<"$cfg"; then
-    echo "ERROR: generated config.js has no CLAUDE_PROXY -- refusing to upload." >&2
-    exit 1
-  fi
-  if grep -Eq "CLAUDE_KEY|sk-ant-[A-Za-z0-9_-]{10,}" <<<"$cfg"; then
-    echo "ERROR: generated config.js contains a credential-shaped string (CLAUDE_KEY / sk-ant-...). Refusing to upload." >&2
+  if grep -Eq "CLAUDE_KEY|CLAUDE_PROXY|sk-ant-[A-Za-z0-9_-]{10,}" <<<"$cfg"; then
+    echo "ERROR: generated config.js contains a credential-shaped or shared-key string (CLAUDE_KEY / CLAUDE_PROXY / sk-ant-...). Refusing to upload." >&2
     exit 1
   fi
 }
@@ -46,12 +33,8 @@ assert_safe_config() {
 verify_published_config() {
   local pfx="$1" live
   live=$(aws --profile $P s3 cp "$B/${pfx}config.js" - --only-show-errors)
-  if ! grep -q "CLAUDE_PROXY" <<<"$live"; then
-    echo "ERROR: published ${pfx}config.js has no CLAUDE_PROXY -- aborting before invalidation." >&2
-    exit 1
-  fi
-  if grep -Eq "CLAUDE_KEY|sk-ant-[A-Za-z0-9_-]{10,}" <<<"$live"; then
-    echo "ERROR: published ${pfx}config.js contains a credential-shaped string -- aborting before invalidation." >&2
+  if grep -Eq "CLAUDE_KEY|CLAUDE_PROXY|sk-ant-[A-Za-z0-9_-]{10,}" <<<"$live"; then
+    echo "ERROR: published ${pfx}config.js contains a credential-shaped or shared-key string -- aborting before invalidation." >&2
     exit 1
   fi
 }
@@ -66,20 +49,15 @@ deploy_shell() {
     [ -f "web/$f" ] && aws --profile $P s3 cp "web/$f" "$B/${pfx}$f" --only-show-errors && echo "  ${pfx}$f"
   done
   # config.js is generated per-target (web/config.js is the local-dev one and is never uploaded).
-  # The assistant's Anthropic key is NEVER shipped to the client — the browser calls the
-  # claude-proxy Lambda (window.CLAUDE_PROXY, from gitignored .claude_proxy) which holds the key
-  # server-side. (The old window.CLAUDE_KEY shared-client-key path was removed after it leaked.)
-  # .claude_proxy is REQUIRED — a deploy must never silently fall back to the direct-browser
-  # path just because that file is missing on this machine (that gap is exactly what caused the
-  # 2026-07 leak, then with .claude_key). Fail loudly instead of degrading.
-  require_file ".claude_proxy" "no proxy URL configured -- this would ship a client that falls back to a direct, per-user-key Anthropic call. Create .claude_proxy (the claude-proxy Lambda's URL) before deploying, or deploy is refused."
+  # There is NO Anthropic key here, shared or otherwise — each user sets their own key in their
+  # own browser (web/agent.js). A shared client-side key (window.CLAUDE_KEY) leaked in 2026-07;
+  # see docs/incident_2026-07_claude_key_leak.md. Do not add one back, client or server-side.
   CFG=$(printf 'window.DATA_BASE = "%s";\nwindow.GATED = true;\n' "$db")
-  CFG="$CFG"$'\n'"window.CLAUDE_PROXY = \"$(tr -d '\n' < .claude_proxy)\";"
   [ -f .infer_api ] && CFG="$CFG"$'\n'"window.INFER_API = \"$(tr -d '\n' < .infer_api)\";"
   assert_safe_config "$CFG"
   printf '%s\n' "$CFG" \
     | aws --profile $P s3 cp - "$B/${pfx}config.js" --content-type application/javascript --only-show-errors \
-    && echo "  ${pfx}config.js  (DATA_BASE=\"$db\" +CLAUDE_PROXY$([ -f .infer_api ] && echo ' +INFER_API'))"
+    && echo "  ${pfx}config.js  (DATA_BASE=\"$db\"$([ -f .infer_api ] && echo ' +INFER_API'))"
   verify_published_config "$pfx"
   for lf in web/lib/*.js; do bn=$(basename "$lf"); aws --profile $P s3 cp "$lf" "$B/${pfx}lib/$bn" --only-show-errors && echo "  ${pfx}lib/$bn"; done
   # /inference subpage
@@ -143,14 +121,12 @@ case "${1:-prod}" in
              inference/molstar.js inference/molstar.css; do
       aws --profile $P s3 cp "$B/dev/$f" "$B/$f" --only-show-errors && echo "  $f"
     done
-    require_file ".claude_proxy" "no proxy URL configured -- refusing to promote a config.js that would fall back to a direct, per-user-key Anthropic call."
     CFG=$(printf 'window.DATA_BASE = "";\nwindow.GATED = true;\n')
-    CFG="$CFG"$'\n'"window.CLAUDE_PROXY = \"$(tr -d '\n' < .claude_proxy)\";"
     [ -f .infer_api ] && CFG="$CFG"$'\n'"window.INFER_API = \"$(tr -d '\n' < .infer_api)\";"
     assert_safe_config "$CFG"
     printf '%s\n' "$CFG" \
       | aws --profile $P s3 cp - "$B/config.js" --content-type application/javascript --only-show-errors \
-      && echo "  config.js  (prod +CLAUDE_PROXY$([ -f .infer_api ] && echo ' +INFER_API'))"
+      && echo "  config.js  (prod$([ -f .infer_api ] && echo ' +INFER_API'))"
     verify_published_config ""
     echo "invalidating /* ..."; invalidate "/*"
     echo "done — promoted to https://rna-atlas.org/"

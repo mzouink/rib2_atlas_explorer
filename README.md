@@ -46,9 +46,11 @@ DEPLOY.md                # github.io shell + S3/CloudFront data + shared-token r
   site into `dist/`; users open the CloudFront URL, enter the passcode (it becomes the `?t=` token a
   CloudFront Function validates on data paths). Source code lives in a **public** GitHub repo
   (version control only — it does not serve the site; `JaneliaSciComp/rna_atlas_website`, public
-  since ~2026-08-03). Secrets/keys never live here — `.claude_key`/`.claude_proxy`/`.anthropic_key`/
-  `.infer_api`/`DEPLOYED.local.md`/`config.json` are all gitignored and injected at deploy time
-  (see [CLAUDE.md](CLAUDE.md) "Gotchas"). Full runbook in [DEPLOY.md](DEPLOY.md).
+  since ~2026-08-03). Secrets/keys never live here — `.infer_api`/`DEPLOYED.local.md`/
+  `config.json` are all gitignored and injected at deploy time (see [CLAUDE.md](CLAUDE.md)
+  "Gotchas"). There is no Anthropic API key anywhere in this deployment, shared or server-side —
+  each user of the in-page assistant sets their own key in their own browser. Full runbook in
+  [DEPLOY.md](DEPLOY.md).
 
 ### config.json (not committed)
 
