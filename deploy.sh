@@ -14,6 +14,48 @@ DIST=E2CV6KWMNI7AQP
 CF=ddc01lh56i5th.cloudfront.net
 cd "$(dirname "$0")"
 
+# Fail loudly (not silently) when a required local config file is missing. See the 2026-07
+# incident: `[ -f .claude_key ] && CFG=...` degraded silently on a machine missing that file,
+# shipping a client with no key-handling code at all, then later `.claude_proxy` inherited the
+# same shape. A missing required file must abort the deploy, not just skip a line.
+require_file() {
+  local f="$1" msg="$2"
+  if [ ! -f "$f" ]; then
+    echo "ERROR: $f is missing -- $msg" >&2
+    exit 1
+  fi
+}
+
+# Refuse to even upload a config.js that doesn't carry CLAUDE_PROXY, or that contains anything
+# credential-shaped (a raw Anthropic key, or a reintroduced CLAUDE_KEY assignment).
+assert_safe_config() {
+  local cfg="$1"
+  if ! grep -q "CLAUDE_PROXY" <<<"$cfg"; then
+    echo "ERROR: generated config.js has no CLAUDE_PROXY -- refusing to upload." >&2
+    exit 1
+  fi
+  if grep -Eq "CLAUDE_KEY|sk-ant-[A-Za-z0-9_-]{10,}" <<<"$cfg"; then
+    echo "ERROR: generated config.js contains a credential-shaped string (CLAUDE_KEY / sk-ant-...). Refusing to upload." >&2
+    exit 1
+  fi
+}
+
+# Re-fetch the config.js that was just published from S3 (not just the local variable) and
+# re-run the same check against the live bytes, so a bad publish is caught before invalidation
+# rather than left live and cached at the edge.
+verify_published_config() {
+  local pfx="$1" live
+  live=$(aws --profile $P s3 cp "$B/${pfx}config.js" - --only-show-errors)
+  if ! grep -q "CLAUDE_PROXY" <<<"$live"; then
+    echo "ERROR: published ${pfx}config.js has no CLAUDE_PROXY -- aborting before invalidation." >&2
+    exit 1
+  fi
+  if grep -Eq "CLAUDE_KEY|sk-ant-[A-Za-z0-9_-]{10,}" <<<"$live"; then
+    echo "ERROR: published ${pfx}config.js contains a credential-shaped string -- aborting before invalidation." >&2
+    exit 1
+  fi
+}
+
 SHELL_FILES="index.html app.js agent.js style.css viz_style.js ss.js datasets.js"
 
 # deploy the web shell to a prefix with a generated (target-specific) config.js.
@@ -27,12 +69,18 @@ deploy_shell() {
   # The assistant's Anthropic key is NEVER shipped to the client — the browser calls the
   # claude-proxy Lambda (window.CLAUDE_PROXY, from gitignored .claude_proxy) which holds the key
   # server-side. (The old window.CLAUDE_KEY shared-client-key path was removed after it leaked.)
+  # .claude_proxy is REQUIRED — a deploy must never silently fall back to the direct-browser
+  # path just because that file is missing on this machine (that gap is exactly what caused the
+  # 2026-07 leak, then with .claude_key). Fail loudly instead of degrading.
+  require_file ".claude_proxy" "no proxy URL configured -- this would ship a client that falls back to a direct, per-user-key Anthropic call. Create .claude_proxy (the claude-proxy Lambda's URL) before deploying, or deploy is refused."
   CFG=$(printf 'window.DATA_BASE = "%s";\nwindow.GATED = true;\n' "$db")
-  [ -f .claude_proxy ] && CFG="$CFG"$'\n'"window.CLAUDE_PROXY = \"$(tr -d '\n' < .claude_proxy)\";"
+  CFG="$CFG"$'\n'"window.CLAUDE_PROXY = \"$(tr -d '\n' < .claude_proxy)\";"
   [ -f .infer_api ] && CFG="$CFG"$'\n'"window.INFER_API = \"$(tr -d '\n' < .infer_api)\";"
+  assert_safe_config "$CFG"
   printf '%s\n' "$CFG" \
     | aws --profile $P s3 cp - "$B/${pfx}config.js" --content-type application/javascript --only-show-errors \
-    && echo "  ${pfx}config.js  (DATA_BASE=\"$db\"$([ -f .claude_proxy ] && echo ' +CLAUDE_PROXY')$([ -f .infer_api ] && echo ' +INFER_API'))"
+    && echo "  ${pfx}config.js  (DATA_BASE=\"$db\" +CLAUDE_PROXY$([ -f .infer_api ] && echo ' +INFER_API'))"
+  verify_published_config "$pfx"
   for lf in web/lib/*.js; do bn=$(basename "$lf"); aws --profile $P s3 cp "$lf" "$B/${pfx}lib/$bn" --only-show-errors && echo "  ${pfx}lib/$bn"; done
   # /inference subpage
   for f in web/inference/*; do [ -f "$f" ] && aws --profile $P s3 cp "$f" "$B/${pfx}inference/$(basename "$f")" --only-show-errors && echo "  ${pfx}inference/$(basename "$f")"; done
@@ -95,12 +143,15 @@ case "${1:-prod}" in
              inference/molstar.js inference/molstar.css; do
       aws --profile $P s3 cp "$B/dev/$f" "$B/$f" --only-show-errors && echo "  $f"
     done
+    require_file ".claude_proxy" "no proxy URL configured -- refusing to promote a config.js that would fall back to a direct, per-user-key Anthropic call."
     CFG=$(printf 'window.DATA_BASE = "";\nwindow.GATED = true;\n')
-    [ -f .claude_proxy ] && CFG="$CFG"$'\n'"window.CLAUDE_PROXY = \"$(tr -d '\n' < .claude_proxy)\";"
+    CFG="$CFG"$'\n'"window.CLAUDE_PROXY = \"$(tr -d '\n' < .claude_proxy)\";"
     [ -f .infer_api ] && CFG="$CFG"$'\n'"window.INFER_API = \"$(tr -d '\n' < .infer_api)\";"
+    assert_safe_config "$CFG"
     printf '%s\n' "$CFG" \
       | aws --profile $P s3 cp - "$B/config.js" --content-type application/javascript --only-show-errors \
-      && echo "  config.js  (prod$([ -f .claude_proxy ] && echo ' +CLAUDE_PROXY')$([ -f .infer_api ] && echo ' +INFER_API'))"
+      && echo "  config.js  (prod +CLAUDE_PROXY$([ -f .infer_api ] && echo ' +INFER_API'))"
+    verify_published_config ""
     echo "invalidating /* ..."; invalidate "/*"
     echo "done — promoted to https://rna-atlas.org/"
     ;;

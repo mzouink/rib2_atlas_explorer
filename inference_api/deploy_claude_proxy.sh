@@ -23,9 +23,13 @@ WEB_TOKEN="$(grep -ioE 'atlas-[a-f0-9]{12}' ../DEPLOYED.local.md | head -1)"
 [ -n "$WEB_TOKEN" ] || { echo "ERROR: could not read passcode from ../DEPLOYED.local.md"; exit 1; }
 KEY="$(tr -d '\n\r ' < ../.anthropic_key 2>/dev/null || true)"
 [ -n "$KEY" ] || { echo "ERROR: put the NEW Anthropic key in ../.anthropic_key (gitignored) first"; exit 1; }
-# spend/abuse guardrails (override via env before running if desired)
-MAX_TOKENS_CAP="${MAX_TOKENS_CAP:-4096}"
-ALLOWED_MODELS="${ALLOWED_MODELS:-claude-sonnet-4-6,claude-opus-4-1,claude-haiku-4-5}"
+# spend/abuse guardrails (override via env before running if desired). ALLOWED_MODELS must
+# match web/index.html's #agent-model option values exactly -- that's the only thing keeping
+# this from defaulting open to every model Anthropic offers (see incident_2026-07_claude_key_leak.md
+# §6.2: premium-model calls were ~96.5% of the 2026-07 loss). claude_proxy.py itself now refuses
+# to start if this resolves empty, but keep it correct here too since this script is what sets it.
+MAX_TOKENS_CAP="${MAX_TOKENS_CAP:-1500}"
+ALLOWED_MODELS="${ALLOWED_MODELS:-claude-sonnet-4-6,claude-opus-4-8,claude-haiku-4-5-20251001,claude-fable-5}"
 
 echo "== 1/4 IAM role (logs only) =="
 cat > /tmp/claude-proxy-trust.json <<'JSON'
@@ -85,4 +89,4 @@ URL="$($AWS apigatewayv2 get-api --api-id "$API_ID" --query ApiEndpoint --output
 echo
 echo "CLAUDE_PROXY = $URL"
 echo "  -> put this in ../.claude_proxy  (gitignored); deploy.sh injects it as window.CLAUDE_PROXY"
-echo "  smoke: curl -s -X POST '$URL/chat' -H 'x-atlas-token: <passcode>' -H 'content-type: application/json' -d '{\"model\":\"claude-haiku-4-5\",\"max_tokens\":16,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'"
+echo "  smoke: curl -s -X POST '$URL/chat' -H 'x-atlas-token: <passcode>' -H 'content-type: application/json' -d '{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":16,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'"

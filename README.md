@@ -44,8 +44,11 @@ DEPLOY.md                # github.io shell + S3/CloudFront data + shared-token r
 - **Shareable (off-network):** **shell + all data on one S3 prefix** (`s3://rnanix/atlas_explorer/`)
   served via **CloudFront (HTTPS), gated by a single passcode**. `build_static.py` stages the whole
   site into `dist/`; users open the CloudFront URL, enter the passcode (it becomes the `?t=` token a
-  CloudFront Function validates on data paths). Source code lives in a **private** git repo (version
-  control only — it does not serve the site). Full runbook in [DEPLOY.md](DEPLOY.md).
+  CloudFront Function validates on data paths). Source code lives in a **public** GitHub repo
+  (version control only — it does not serve the site; `JaneliaSciComp/rna_atlas_website`, public
+  since ~2026-08-03). Secrets/keys never live here — `.claude_key`/`.claude_proxy`/`.anthropic_key`/
+  `.infer_api`/`DEPLOYED.local.md`/`config.json` are all gitignored and injected at deploy time
+  (see [CLAUDE.md](CLAUDE.md) "Gotchas"). Full runbook in [DEPLOY.md](DEPLOY.md).
 
 ### config.json (not committed)
 

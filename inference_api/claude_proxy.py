@@ -9,8 +9,15 @@ which leaked because a raw key in client JS is readable by anyone who loads the 
     -> forwards to https://api.anthropic.com/v1/messages with x-api-key = ANTHROPIC_API_KEY (env)
     -> returns Anthropic's status + JSON body verbatim
 
-Env: ANTHROPIC_API_KEY (the key), WEB_TOKEN (gate passcode), MAX_TOKENS_CAP (default 4096),
-     ALLOWED_MODELS (optional comma list). No external deps — stdlib urllib only.
+Env: ANTHROPIC_API_KEY (the key), WEB_TOKEN (gate passcode), MAX_TOKENS_CAP (default 1500 --
+     the exact max_tokens the assistant sends; raise it deliberately, don't leave it loose),
+     ALLOWED_MODELS (REQUIRED comma list -- e.g. the ids in web/index.html's #agent-model
+     select). No external deps — stdlib urllib only.
+
+ALLOWED_MODELS defaulting open was the single highest-leverage cost control missed in the
+2026-07 leak (premium-model calls were ~96.5% of the loss). It is required below -- the module
+refuses to load without it, so a misconfigured deploy fails closed (every request errors) rather
+than silently permitting any model.
 """
 import base64
 import json
@@ -20,8 +27,14 @@ import urllib.request
 
 WEB_TOKEN = os.environ.get("WEB_TOKEN", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MAX_TOKENS_CAP = int(os.environ.get("MAX_TOKENS_CAP", "4096"))
+MAX_TOKENS_CAP = int(os.environ.get("MAX_TOKENS_CAP", "1500"))
 ALLOWED_MODELS = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
+if not ALLOWED_MODELS:
+    raise RuntimeError(
+        "claude_proxy misconfigured: ALLOWED_MODELS is unset/empty. Refusing to start with an "
+        "open model allowlist -- set it to the models the assistant actually offers, e.g. "
+        "'claude-sonnet-4-6,claude-opus-4-8,claude-haiku-4-5-20251001,claude-fable-5'."
+    )
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 _CORS = {"Access-Control-Allow-Origin": "*",
@@ -63,7 +76,7 @@ def lambda_handler(event, context):
     mt = body.get("max_tokens")
     if not isinstance(mt, int) or mt <= 0 or mt > MAX_TOKENS_CAP:
         body["max_tokens"] = MAX_TOKENS_CAP
-    if ALLOWED_MODELS and body.get("model") not in ALLOWED_MODELS:
+    if body.get("model") not in ALLOWED_MODELS:  # ALLOWED_MODELS is always non-empty (see module load)
         return _resp(400, {"error": "model not allowed", "allowed": ALLOWED_MODELS})
     body.pop("stream", None)  # this proxy is non-streaming (buffered response)
 

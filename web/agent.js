@@ -1,7 +1,11 @@
 // Atlas assistant — an in-page Claude agent that drives the explorer (filters, search,
 // fold selection, map view) and does analysis (data + stats + charts) via window.AtlasAPI.
-// Token: localStorage "atlas_claude_key" (user-supplied) else window.CLAUDE_KEY (shared,
-// injected into the gated config). Calls the Anthropic Messages API directly from the browser.
+// Preferred path: the server-side claude-proxy Lambda (window.CLAUDE_PROXY) — it holds the
+// Anthropic key, the browser only ever sends the shared site passcode. If no proxy is
+// configured, falls back to a PER-USER key (localStorage "atlas_claude_key", entered by that
+// user, never shipped by deploy.sh) calling the Anthropic Messages API directly from the
+// browser. There is intentionally no shared/org key path here — that was the 2026-07 leak
+// (window.CLAUDE_KEY, injected by deploy.sh into public config.js); do not reintroduce it.
 (function () {
   const API = "https://api.anthropic.com/v1/messages";
   function model() { const s = $("agent-model"); return (s && s.value) || localStorage.getItem("atlas_model") || window.CLAUDE_MODEL || "claude-sonnet-4-6"; }
@@ -9,7 +13,7 @@
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let messages = [];
 
-  function key() { return localStorage.getItem("atlas_claude_key") || window.CLAUDE_KEY || ""; }
+  function key() { return localStorage.getItem("atlas_claude_key") || ""; }
 
   const SYSTEM = `You are the assistant embedded in the RNA Atlas Explorer, a web tool over a predicted RNA structure atlas (Ribonanza-2 curated A–H plus Ribo-1 pseudolabel / OpenKnot / RFAM-PDB). Each row is an RNA "fold" with fields like: id, name, letter (library A–H), length, plddt, best_tm1 (novelty vs PDB; lower=more novel), is_novel_v341, near (nearest PDB), rna_type, rfam_id/rfam_name, fold_size & global_fold_id (structural cluster + member count), seq_cluster_size & global_seq_cluster_id, contact_ratio (compactness), bp_fraction, pseudoknot, n_tert/n_rare (tertiary motifs), motifs, shape_ok/shape_agr, ex/ey (2D t-SNE embedding coords), termini_bp (5′ & 3′ ends base-pair to each other, nt1↔ntN — useful for scaffolding), termini_trim (first-paired base pairs with last-paired, so single-stranded ends can be trimmed) with overhang5/overhang3 (trimmable end lengths), uucg_tetraloop (contains a UUCG tetraloop), conditioning (how the structure was conditioned at prediction time: 'msa'/'tbm'/'chemmap', or sequence-only if none).
 

@@ -5,8 +5,12 @@ web app over the Ribonanza-2 (+ add-on) RNA prediction atlases: filter/rank fold
 **map**, per-fold 3D + tracks + secondary structure, an in-page **Claude assistant**, and a
 (scaffolded) **/inference** page. Hosted on S3 + CloudFront, passcode-gated.
 
-- **Repo / remote:** `github.com/mzouink/rib2_atlas_explorer` (this dir: `/groups/das/home/zouinkhim/atlas_explorer`).
-- **Live:** `https://rna-atlas.org` (and the CloudFront domain). Secrets/IDs (passcode, distribution/OAC, deployer IAM, domain/cert, shared Claude key location) are in **`DEPLOYED.local.md`** (gitignored) — never commit those.
+- **Repo / remote:** `github.com/JaneliaSciComp/rna_atlas_website` (**public** since ~2026-08-03;
+  this dir: `/groups/das/home/zouinkhim/atlas_explorer`).
+- **Live:** `https://rna-atlas.org` (and the CloudFront domain). Secrets/IDs (passcode,
+  distribution/OAC, deployer IAM, domain/cert, Anthropic key) are in **`DEPLOYED.local.md`** /
+  `.claude_key`/`.claude_proxy`/`.anthropic_key` (all gitignored) — never commit those. Since the
+  repo is now public, treat anything not gitignored as world-readable when adding new config.
 
 ## Architecture
 
@@ -44,7 +48,10 @@ web app over the Ribonanza-2 (+ add-on) RNA prediction atlases: filter/rank fold
   `agent.js` silently; brace-counting misses it (and gives false positives on `{`/`}` inside strings).
   `node` is at `/usr/bin/node`.
 - `config.js` is generated per-target by deploy (never upload `web/config.js`): sets `DATA_BASE`,
-  `GATED=true`, and injects `window.CLAUDE_KEY` from the gitignored **`.claude_key`** if present.
+  `GATED=true`, and injects `window.CLAUDE_PROXY` from the gitignored **`.claude_proxy`** (the
+  claude-proxy Lambda URL — **required**, `deploy.sh` refuses to deploy without it; see Gotchas).
+  There is no client-side Anthropic key anymore — that pattern (`window.CLAUDE_KEY`) leaked in
+  2026-07 and was removed; see `docs/incident_2026-07_claude_key_leak.md`.
 - `promote` must carry image assets + `lib/*` too (it does — keep the lists in sync if adding files).
 - Data lives at root only; `dev/` shell reads it via `DATA_BASE=".."` (so deep sub-pages like
   `/inference` must keep relative-path assumptions in mind).
@@ -90,16 +97,27 @@ web app over the Ribonanza-2 (+ add-on) RNA prediction atlases: filter/rank fold
 - **Show-more** pagination (`Show more (+N)` / `Show all`, "X of Y").
 - **Map** view (Table/Map toggle): canvas scatter of the t-SNE embedding, color-by, zoom (clamped) / pan / double-click reset, hover, click→deep view, t-SNE axes.
 - **Deep view**: 3D (3Dmol) with a **Color by** selector (2A3/DMS/pLDDT/pairing/nucleotide/spectrum) + motif sticks; sequence/DMS/2A3/pairing tracks; **secondary structure** (forna-style 2D default, arc-diagram toggle); RNAcentral/Rfam/cluster metadata; **Export** zip (cif+pdb+png+txt).
-- **Claude assistant** (`agent.js`, ✦ logo button): drives `window.AtlasAPI` (filters/search/map/select) + analysis (get_results/field_stats) + charts (2D expand+PNG, interactive 3D three.js downloadable as HTML). Model selector, welcome+examples, live status, markdown tables, localStorage conversation cache. Key from `.claude_key` (gated config) or per-user localStorage.
+- **Claude assistant** (`agent.js`, ✦ logo button): drives `window.AtlasAPI` (filters/search/map/select) + analysis (get_results/field_stats) + charts (2D expand+PNG, interactive 3D three.js downloadable as HTML). Model selector, welcome+examples, live status, markdown tables, localStorage conversation cache. Calls the server-side **claude-proxy Lambda** (`window.CLAUDE_PROXY`, key held in the Lambda, browser sends only the site passcode) by default; falls back to a **per-user** localStorage key (direct-to-Anthropic) only if no proxy is configured. No shared/org key ever lives in the browser.
 - **/inference** (`web/inference/`): paste a sequence → staged **no-MSA draft → MSA-refined** result. **Front-end scaffold only**; set `window.INFER_API` and implement `POST /predict` + `GET /status` (see the adapter comment in `inference.js`).
 
 ## Gotchas
 
-- `config.json`, `.claude_key`, `DEPLOYED.local.md`, `dist/` are **gitignored** — never commit.
+- `config.json`, `.claude_key`, `.claude_proxy`, `.anthropic_key`, `.infer_api`,
+  `DEPLOYED.local.md`, `dist/` are **gitignored** — never commit. The repo is now **public**, so
+  anything NOT on this list is world-readable — check new config files against it before adding.
 - **≤30 nt F-H folds have all-NaN chemmap** in the source parquet (~52% of F-H, all the short
   miRNA/fragment designs) — empty reactivity there is faithful, not a bug.
-- The shared Claude key ships in the (gated) client `config.js` and calls `api.anthropic.com`
-  directly — set a spend limit; per-user-key mode is also supported.
+- **Never reintroduce a client-side shared Anthropic key.** `web/agent.js` must only call the
+  server-side claude-proxy Lambda (`window.CLAUDE_PROXY`) or use a per-user, browser-entered key
+  (`localStorage.atlas_claude_key`) — never a shared key injected via `config.js`. That exact
+  pattern (`window.CLAUDE_KEY`, injected by `deploy.sh` from `.claude_key`) leaked in 2026-07;
+  see `docs/incident_2026-07_claude_key_leak.md`. `deploy.sh` now hard-fails if `.claude_proxy`
+  is missing and asserts the published `config.js` has no credential-shaped string before
+  invalidating — don't work around those checks.
+- `inference_api/claude_proxy.py` **requires** `ALLOWED_MODELS` (refuses to load if empty/unset)
+  and defaults `MAX_TOKENS_CAP` to 1500 (the assistant's actual `max_tokens`) — don't loosen
+  either without a real reason; see the incident doc §6.2 for why the allowlist matters (premium
+  model calls were ~96.5% of the leaked-key loss).
 - `node --check` every JS edit before deploy (see Deploy).
 - No heavy recursive `find`/`du` over `/groups` or `/nrs` atlas trees — work manifest-driven.
 
